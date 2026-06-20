@@ -1,0 +1,353 @@
+               
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Просмотр письма</title>
+
+    <!-- Современный шрифт Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+    <style>
+        /* Пастельная цветовая палитра на темном фоне */
+        :root {
+            --bg-base: #11111b;       /* Глубокий темный фон */
+            --bg-surface: #181825;    /* Фон карточек */
+            --bg-surface-alt: #1e1e2e;/* Выделение */
+            
+            --text-main: #cdd6f4;     /* Основной текст */
+            --text-muted: #a6adc8;    /* Второстепенный текст */
+            
+            --pastel-mauve: #cba6f7;  /* Пастельно-фиолетовый (Акцент 1) */
+            --pastel-blue: #89b4fa;   /* Пастельно-синий (Акцент 2) */
+            --pastel-green: #a6e3a1;  /* Пастельно-зеленый (Акцент 3) */
+            --pastel-red: #f38ba8;    /* Пастельно-красный (Ошибки) */
+            
+            --border-color: #313244;
+            --radius-lg: 16px;
+            --radius-sm: 8px;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            background-color: var(--bg-base);
+            background-image: radial-gradient(circle at top right, rgba(203, 166, 247, 0.05), transparent 40%),
+                              radial-gradient(circle at bottom left, rgba(137, 180, 250, 0.05), transparent 40%);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            box-sizing: border-box;
+        }
+
+        .wrapper {
+            width: 100%;
+            max-width: 850px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            margin-top: 2vh;
+        }
+
+        /* --- БЛОК: ШАПКА ПИСЬМА --- */
+        .block-header {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-left: 5px solid var(--pastel-mauve);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .email-subject {
+            font-size: 26px;
+            font-weight: 600;
+            color: var(--pastel-mauve);
+            margin: 0 0 16px 0;
+            line-height: 1.3;
+        }
+
+        .email-meta {
+            color: var(--text-muted);
+            font-size: 15px;
+            line-height: 1.8;
+            background: var(--bg-surface-alt);
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
+        }
+
+        /* --- БЛОК: СОДЕРЖИМОЕ ПИСЬМА --- */
+        .block-content {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .section-title {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .title-text { color: var(--pastel-blue); }
+        .title-attachment { color: var(--pastel-green); }
+
+        .iframe-wrapper {
+            background-color: #ffffff; /* Белый фон для писем, т.к. верстка почты рассчитана на светлую тему */
+            border-radius: var(--radius-sm);
+            padding: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        iframe {
+            width: 100%;
+            border: none;
+            display: block;
+            min-height: 200px;
+        }
+
+        /* --- БЛОК: ВЛОЖЕНИЯ --- */
+        .block-attachments {
+            background-color: var(--bg-surface);
+            border: 1px dashed var(--pastel-green);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+        }
+
+        .attachments-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .attachment-item {
+            background: var(--bg-surface-alt);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: transform 0.2s;
+        }
+
+        .attachment-item:hover {
+            transform: translateY(-3px);
+            border-color: var(--pastel-green);
+        }
+
+        .file-name {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-main);
+            word-break: break-all;
+        }
+
+        .file-name i {
+            color: var(--pastel-green);
+            font-size: 20px;
+        }
+
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background-color: rgba(166, 227, 161, 0.15);
+            color: var(--pastel-green);
+            text-decoration: none;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .download-btn:hover {
+            background-color: var(--pastel-green);
+            color: var(--bg-base);
+        }
+
+        /* --- СТАТУСЫ --- */
+        .status-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 40vh;
+            text-align: center;
+            gap: 16px;
+            font-size: 18px;
+            color: var(--text-muted);
+        }
+
+        .status-container i.loading {
+            font-size: 48px;
+            color: var(--pastel-blue);
+        }
+
+        .status-container.error i {
+            font-size: 48px;
+            color: var(--pastel-red);
+        }
+        
+        .status-container.error span {
+            color: var(--pastel-red);
+        }
+
+        @media (max-width: 600px) {
+            .block-header, .block-content, .block-attachments { padding: 20px; }
+            .email-subject { font-size: 22px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="wrapper" id="app">
+        <!-- Прелоадер -->
+        <div class="status-container">
+            <i class="fas fa-circle-notch fa-spin loading"></i>
+            <span>Расшифровка письма...</span>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const appDiv = document.getElementById("app");
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get("token");
+
+            if (!token) {
+                appDiv.innerHTML = `
+                <div class="status-container error">
+                    <i class="fas fa-ghost"></i>
+                    <span><b>Ошибка доступа:</b> Токен письма отсутствует.</span>
+                    <span style="font-size: 15px; color: var(--text-muted);">Пожалуйста, перейдите по ссылке из Telegram-бота.</span>
+                </div>`;
+                return;
+            }
+
+            fetch(`/api/mail/${token}`)
+                .then((response) => {
+                    if (!response.ok) throw new Error(`Письмо удалено сервером или не существует.`);
+                    return response.json();
+                })
+                .then((data) => {
+                    appDiv.innerHTML = "";
+                    
+                    let htmlHeader = "";
+                    let htmlContent = "";
+                    let htmlAttachments = "";
+                    let hasAttachments = false;
+
+                    // Парсим JSON и раскидываем по переменным
+                    data.forEach((item) => {
+                        // 1. Блок ШАПКИ
+                        if (item.head !== undefined || item.subhead !== undefined) {
+                            htmlHeader = `
+                            <div class="block-header">
+                                <h1 class="email-subject">${item.head || "Без темы"}</h1>
+                                <div class="email-meta">${item.subhead || "Информация скрыта"}</div>
+                            </div>`;
+                        } 
+                        
+                        // 2. Блок ТЕКСТА
+                        else if (item.title !== undefined || item.text !== undefined) {
+                            // Экранируем кавычки для безопасной вставки в srcdoc
+                            const safeHtml = (item.text || "").replace(/"/g, '&quot;');
+                            htmlContent = `
+                            <div class="block-content">
+                                <div class="section-title title-text">
+                                    <i class="fas fa-envelope-open-text"></i> ${item.title || "Текст письма"}
+                                </div>
+                                <div class="iframe-wrapper">
+                                    <iframe id="mail-iframe" srcdoc="${safeHtml}" scrolling="no"></iframe>
+                                </div>
+                            </div>`;
+                        }
+
+                        // 3. Блок ВЛОЖЕНИЙ
+                        else if (item.file !== undefined && item.download !== undefined) {
+                            hasAttachments = true;
+                            htmlAttachments += `
+                            <div class="attachment-item">
+                                <div class="file-name">
+                                    <i class="fas fa-file-alt"></i>
+                                    <span>${item.file}</span>
+                                </div>
+                                <a href="${item.download}" target="_blank" class="download-btn">
+                                    <i class="fas fa-cloud-download-alt"></i> Скачать файл
+                                </a>
+                            </div>`;
+                        }
+                    });
+
+                    // Оборачиваем вложения в общий контейнер, если они есть
+                    if (hasAttachments) {
+                        htmlAttachments = `
+                        <div class="block-attachments">
+                            <div class="section-title title-attachment">
+                                <i class="fas fa-paperclip"></i> Прикрепленные файлы
+                            </div>
+                            <div class="attachments-grid">
+                                ${htmlAttachments}
+                            </div>
+                        </div>`;
+                    }
+
+                    // Отрисовываем интерфейс в нужном порядке
+                    appDiv.innerHTML = htmlHeader + htmlContent + htmlAttachments;
+
+                    // Логика авторазмера iframe
+                    const iframe = document.getElementById("mail-iframe");
+                    if (iframe) {
+                        iframe.onload = function() {
+                            setTimeout(() => {
+                                try {
+                                    // Устанавливаем высоту по контенту
+                                    const height = this.contentWindow.document.documentElement.scrollHeight;
+                                    this.style.height = (height + 20) + 'px';
+                                    
+                                    // Форсируем открытие всех ссылок в новой вкладке
+                                    const links = this.contentWindow.document.querySelectorAll('a');
+                                    links.forEach(link => link.setAttribute('target', '_blank'));
+                                    
+                                    // Убираем марджины у body внутри письма для аккуратности
+                                    this.contentWindow.document.body.style.margin = "0";
+                                } catch(e) {
+                                    this.style.height = "600px"; 
+                                }
+                            }, 150);
+                        };
+                    }
+                })
+                .catch((error) => {
+                    appDiv.innerHTML = `
+                    <div class="status-container error">
+                        <i class="fas fa-box-open"></i>
+                        <span><b>Письмо недоступно</b></span>
+                        <span style="font-size: 15px; color: var(--text-muted);">${error.message}</span>
+                    </div>`;
+                });
+        });
+    </script>
+</body>
+</html>
