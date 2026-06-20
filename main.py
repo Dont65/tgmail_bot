@@ -1,60 +1,51 @@
 import asyncio
 import email
 import html
+import json
 import os
-import random
+import secrets
 import shutil
 import sqlite3
 import string
 import time
 import urllib.parse
+import re
 from email.header import decode_header
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 from aiosmtpd.smtp import SMTP as SMTPServer
 
 # --- НАСТРОЙКИ ---
-# Рекомендуется использовать переменные окружения, например: os.getenv("BOT_TOKEN")
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "your_bot_token"
 DOMAIN = "yourdomain.com"
-BOT_PASSWORD = "your_secure_password"
-# Если прокси не используется, оставьте строку пустой или удалите инициализацию сессии
+BOT_PASSWORD = "YOUR_PASSWORD"
 PROXY_URL = None
 
 # --- НАСТРОЙКИ ВЕБ-СЕРВЕРА ---
 WEB_PORT = 80
-WEB_URL_BASE = "http://yourserver.com"
+WEB_URL_BASE = "http://yourdomain.com" # <-- ВАЖНО: Укажите ваш IP без слеша на конце
 
 dp = Dispatcher()
-
-# --- БАЗА ДАННЫХ И ПАПКИ ---
 ATTACHMENTS_DIR = "attachments"
 
-
 def init_env():
-    # Создаем БД
     conn = sqlite3.connect("mailbot.db")
     c = conn.cursor()
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, auth INTEGER)"""
-    )
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS emails (email TEXT PRIMARY KEY, user_id INTEGER)"""
-    )
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS messages (token TEXT PRIMARY KEY, html TEXT, expires_at REAL)"""
-    )
+    c.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, auth INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS emails (email TEXT PRIMARY KEY, user_id INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS messages (token TEXT PRIMARY KEY, html TEXT, expires_at REAL)""")
     conn.commit()
     conn.close()
 
-    # Создаем папку для вложений
     if not os.path.exists(ATTACHMENTS_DIR):
         os.makedirs(ATTACHMENTS_DIR)
-
 
 def is_auth(user_id):
     conn = sqlite3.connect("mailbot.db")
@@ -64,7 +55,6 @@ def is_auth(user_id):
     conn.close()
     return res and res[0] == 1
 
-
 def set_auth(user_id):
     conn = sqlite3.connect("mailbot.db")
     c = conn.cursor()
@@ -72,94 +62,148 @@ def set_auth(user_id):
     conn.commit()
     conn.close()
 
+class CreateMail(StatesGroup):
+    waiting_for_custom_name = State()
 
-def format_size(size_bytes):
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    else:
-        return f"{size_bytes / (1024 * 1024):.2f} MB"
-
-
-# --- ОБРАБОТЧИКИ ТЕЛЕГРАМ БОТА ---
+# --- ТЕЛЕГРАМ БОТ ---
 @dp.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     if is_auth(message.from_user.id):
-        await message.answer(
-            "Вы уже авторизованы.\n/create - создать почту\n/panel - посмотреть все почты"
-        )
+        await message.answer("Вы уже авторизованы.\n/create - создать почту\n/panel - посмотреть все почты\n/delete - удалить почту")
     else:
-        await message.answer(
-            f"Добро пожаловать в бота почты {DOMAIN}!\nВведите пароль:"
-        )
-
+        await message.answer(f"Добро пожаловать в бота почты {DOMAIN}!\nВведите пароль:")
 
 @dp.message(F.text == BOT_PASSWORD)
 async def auth_password(message: Message):
-    if is_auth(message.from_user.id):
-        return
+    if is_auth(message.from_user.id): return
     set_auth(message.from_user.id)
     await message.answer("✅ Пароль принят!\nИспользуйте /create для создания ящика.")
 
-
 @dp.message(Command("create"))
 async def cmd_create(message: Message):
-    if not is_auth(message.from_user.id):
-        return await message.answer("Введите пароль.")
-    prefix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    new_email = f"{prefix}@{DOMAIN}"
+    if not is_auth(message.from_user.id): return await message.answer("Введите пароль.")
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎲 Случайная почта", callback_data="create_random")],
+        [InlineKeyboardButton(text="✍️ Написать свой юзернейм", callback_data="create_custom")]
+    ])
+    await message.answer("Как вы хотите создать почту?", reply_markup=markup)
 
+@dp.callback_query(F.data == "create_random")
+async def process_create_random(callback: CallbackQuery):
+    prefix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+    new_email = f"{prefix}@{DOMAIN}"
     conn = sqlite3.connect("mailbot.db")
     c = conn.cursor()
-    c.execute(
-        "INSERT INTO emails (email, user_id) VALUES (?, ?)",
-        (new_email, message.from_user.id),
-    )
+    c.execute("INSERT INTO emails (email, user_id) VALUES (?, ?)", (new_email, callback.from_user.id))
     conn.commit()
     conn.close()
-    await message.answer(
-        f"✅ Создана почта:\n<code>{new_email}</code>", parse_mode="HTML"
-    )
+    await callback.message.edit_text(f"✅ Создана случайная почта:\n<code>{new_email}</code>", parse_mode="HTML")
+    await callback.answer()
 
+@dp.callback_query(F.data == "create_custom")
+async def process_create_custom(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(f"Отправьте мне желаемый логин (только a-z, 0-9 и '_').\nОкончание <code>@{DOMAIN}</code> добавится автоматически.", parse_mode="HTML")
+    await state.set_state(CreateMail.waiting_for_custom_name)
+    await callback.answer()
 
-@dp.message(Command("panel"))
-async def cmd_panel(message: Message):
-    if not is_auth(message.from_user.id):
-        return await message.answer("Введите пароль.")
+@dp.message(CreateMail.waiting_for_custom_name)
+async def process_custom_name_input(message: Message, state: FSMContext):
+    username = message.text.lower().strip()
+    if not re.match(r"^[a-z0-9_]{3,20}$", username):
+        return await message.answer("❌ Неверный формат! Используйте от 3 до 20 символов (a-z, 0-9, '_').")
+
+    new_email = f"{username}@{DOMAIN}"
     conn = sqlite3.connect("mailbot.db")
     c = conn.cursor()
-    c.execute("SELECT email FROM emails")
+    c.execute("SELECT email FROM emails WHERE email = ?", (new_email,))
+    if c.fetchone():
+        conn.close()
+        return await message.answer("❌ Эта почта уже занята. Придумайте другой логин.")
+    
+    c.execute("INSERT INTO emails (email, user_id) VALUES (?, ?)", (new_email, message.from_user.id))
+    conn.commit()
+    conn.close()
+    await state.clear()
+    await message.answer(f"✅ Ваша почта успешно создана:\n<code>{new_email}</code>", parse_mode="HTML")
+
+@dp.message(Command("delete"))
+async def cmd_delete(message: Message):
+    if not is_auth(message.from_user.id): return await message.answer("Введите пароль.")
+    conn = sqlite3.connect("mailbot.db")
+    c = conn.cursor()
+    c.execute("SELECT email FROM emails WHERE user_id = ?", (message.from_user.id,))
     emails = c.fetchall()
     conn.close()
 
-    if not emails:
-        return await message.answer("В базе пока нет созданных почт.")
-    text = "📋 <b>Все существующие почты:</b>\n\n"
-    for e in emails:
-        text += f"- <code>{e[0]}</code>\n"
-    await message.answer(text, parse_mode="HTML")
+    if not emails: return await message.answer("У вас нет созданных почт.")
 
+    builder = InlineKeyboardBuilder()
+    for e in emails:
+        builder.row(InlineKeyboardButton(text=f"🗑 {e[0]}", callback_data=f"del_{e[0]}"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="del_cancel"))
+    await message.answer("Выберите почту для удаления:", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("del_"))
+async def process_delete_mail(callback: CallbackQuery):
+    action = callback.data.replace("del_", "")
+    if action == "cancel":
+        await callback.message.edit_text("Действие отменено.")
+        return await callback.answer()
+
+    conn = sqlite3.connect("mailbot.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM emails WHERE email = ? AND user_id = ?", (action, callback.from_user.id))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+
+    if deleted:
+        await callback.message.edit_text(f"✅ Почта <code>{action}</code> успешно удалена.", parse_mode="HTML")
+    else:
+        await callback.message.edit_text("❌ Ошибка при удалении.")
+    await callback.answer()
+
+@dp.message(Command("panel"))
+async def cmd_panel(message: Message):
+    if not is_auth(message.from_user.id): return await message.answer("Введите пароль.")
+    conn = sqlite3.connect("mailbot.db")
+    c = conn.cursor()
+    c.execute("SELECT email FROM emails WHERE user_id = ?", (message.from_user.id,))
+    emails = c.fetchall()
+    conn.close()
+
+    if not emails: return await message.answer("В базе пока нет созданных вами почт.")
+    text = "📋 <b>Ваши почты:</b>\n\n"
+    for e in emails: text += f"- <code>{e[0]}</code>\n"
+    await message.answer(text, parse_mode="HTML")
 
 # --- ПОЧТОВЫЙ СЕРВЕР (SMTP) ---
 def decode_mime_words(s):
-    if not s:
-        return "Нет данных"
+    if not s: return "Нет данных"
     out = ""
     try:
         for word, charset in decode_header(s):
-            if isinstance(word, bytes):
-                out += word.decode(charset or "utf-8", errors="ignore")
-            else:
-                out += word
-    except Exception:
-        return str(s)
+            if isinstance(word, bytes): out += word.decode(charset or "utf-8", errors="ignore")
+            else: out += word
+    except: return str(s)
     return out
-
 
 class MailHandler:
     def __init__(self, bot: Bot):
         self.bot = bot
+
+    async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
+        conn = sqlite3.connect("mailbot.db")
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM emails WHERE email = ?", (address,))
+        exists = c.fetchone()
+        conn.close()
+        if not exists:
+            print(f"[{time.strftime('%X')}] ❌ ОТКЛОНЕНО (Нет в БД): {address}")
+            return '550 5.1.1 User unknown'
+        envelope.rcpt_tos.append(address)
+        return '250 OK'
 
     async def handle_DATA(self, server, session, envelope):
         rcpt_tos = envelope.rcpt_tos
@@ -167,365 +211,155 @@ class MailHandler:
 
         subject = decode_mime_words(msg.get("Subject"))
         sender = decode_mime_words(msg.get("From"))
-
-        plain_text = ""
-        html_content = ""
+        plain_text, html_content = "", ""
         attachments = []
 
-        # Генерируем токен заранее, чтобы создать папку для файлов этого письма
-        token = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+        token = secrets.token_urlsafe(16)
         msg_dir = os.path.join(ATTACHMENTS_DIR, token)
 
-        print("\n" + "=" * 40)
-        print(f"📥 ПРИШЛО НОВОЕ ПИСЬМО ОТ: {sender}")
-
         for part in msg.walk():
-            if part.get_content_maintype() == "multipart":
-                continue
-
+            if part.get_content_maintype() == "multipart": continue
             content_type = part.get_content_type()
             payload = part.get_payload(decode=True)
-
-            if not payload:
-                continue
+            if not payload: continue
 
             filename = part.get_filename()
-            if filename:
-                filename = decode_mime_words(filename)
+            if filename: filename = decode_mime_words(filename)
 
-            # Если это текст и нет имени файла - это тело письма
             if content_type == "text/plain" and not filename:
-                if not plain_text:
-                    plain_text = payload.decode(errors="ignore")
-
+                if not plain_text: plain_text = payload.decode(errors="ignore")
             elif content_type == "text/html" and not filename:
-                if not html_content:
-                    html_content = payload.decode(errors="ignore")
-
-            # Если есть имя файла - это ВЛОЖЕНИЕ (любой формат)
+                if not html_content: html_content = payload.decode(errors="ignore")
             elif filename or "name=" in part.get("Content-Type", ""):
-                if not filename:
-                    filename = f"file_{random.randint(1000, 9999)}.bin"
-
-                # Создаем папку, если еще не создана
+                if not filename: filename = f"file_{secrets.randbelow(9999)}.bin"
+                safe_filename = os.path.basename(filename)
                 os.makedirs(msg_dir, exist_ok=True)
-                filepath = os.path.join(msg_dir, filename)
+                filepath = os.path.join(msg_dir, safe_filename)
+                with open(filepath, "wb") as f: f.write(payload)
+                attachments.append({"name": safe_filename})
 
-                with open(filepath, "wb") as f:
-                    f.write(payload)
+        if html_content: body_to_render = html_content
+        elif plain_text: body_to_render = f'<div style="white-space: pre-wrap; font-family: sans-serif;">{html.escape(plain_text)}</div>'
+        else: body_to_render = "<p>[Текст письма отсутствует]</p>"
 
-                attachments.append(
-                    {
-                        "name": filename,
-                        "size": len(payload),
-                        "is_image": content_type.startswith("image/"),
-                    }
-                )
+        # --- ГЕНЕРИРУЕМ JSON ДЛЯ FRONTEND ---
+        email_data = []
+        email_data.append({
+            "head": html.escape(subject),
+            "subhead": f"От: {html.escape(sender)}<br>Кому: {html.escape(', '.join(rcpt_tos))}"
+        })
+        email_data.append({
+            "title": "Содержимое письма",
+            "text": body_to_render
+        })
+        for att in attachments:
+            safe_name = html.escape(att["name"])
+            url_name = urllib.parse.quote(att["name"])
+            email_data.append({
+                "title": "Вложение",
+                "file": safe_name,
+                "download": f"/download/{token}/{url_name}"
+            })
 
-        # Выбираем тело письма
-        if html_content:
-            body_to_render = html_content
-        elif plain_text:
-            body_to_render = f'<div style="white-space: pre-wrap; font-family: Roboto, sans-serif; color: #1c1b1f;">{html.escape(plain_text)}</div>'
-        else:
-            body_to_render = "<p style='color: #7f8c8d; font-style: italic;'>[Текст письма отсутствует]</p>"
-
-        # --- ГЕНЕРАЦИЯ HTML В СТИЛЕ MD3 (DARK THEME) ---
-        html_template = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{html.escape(subject)}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
-    <style>
-        :root {{
-            --md-sys-color-background: #141218;
-            --md-sys-color-on-background: #E6E0E9;
-            --md-sys-color-surface: #211F26;
-            --md-sys-color-surface-container: #2B2930;
-            --md-sys-color-primary: #D0BCFF;
-            --md-sys-color-on-surface-variant: #CAC4D0;
-            --md-sys-color-outline: #938F99;
-        }}
-        body {{
-            font-family: 'Roboto', sans-serif;
-            background-color: var(--md-sys-color-background);
-            color: var(--md-sys-color-on-background);
-            margin: 0; padding: 16px;
-            display: flex; justify-content: center;
-        }}
-        .container {{
-            max-width: 800px; width: 100%;
-            display: flex; flex-direction: column; gap: 16px;
-        }}
-        .header-card {{
-            background-color: var(--md-sys-color-surface);
-            border-radius: 28px; padding: 24px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }}
-        .subject {{
-            font-size: 24px; font-weight: 500; margin-bottom: 16px;
-            color: var(--md-sys-color-on-background);
-        }}
-        .meta-row {{
-            display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
-            font-size: 14px;
-        }}
-        .meta-icon {{ color: var(--md-sys-color-on-surface-variant); font-size: 20px; }}
-        .meta-label {{ color: var(--md-sys-color-on-surface-variant); width: 50px; }}
-        .meta-value {{ color: var(--md-sys-color-primary); font-weight: 500; word-break: break-all; }}
-
-        .body-card {{
-            background-color: #FFFFFF; /* Белый фон для корректного отображения HTML писем */
-            color: #1C1B1F;
-            border-radius: 28px; padding: 24px;
-            overflow-x: auto;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }}
-
-        .attachments-section {{
-            background-color: var(--md-sys-color-surface);
-            border-radius: 28px; padding: 24px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }}
-        .attachments-title {{
-            font-size: 18px; font-weight: 500; margin-bottom: 16px;
-            display: flex; align-items: center; gap: 8px;
-        }}
-        .attachments-grid {{
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px;
-        }}
-        .file-card {{
-            background-color: var(--md-sys-color-surface-container);
-            border-radius: 16px; padding: 12px;
-            display: flex; align-items: center; gap: 16px;
-            text-decoration: none; color: inherit;
-            transition: background-color 0.2s;
-            border: 1px solid var(--md-sys-color-outline);
-        }}
-        .file-card:hover {{ background-color: #36343B; cursor: pointer; }}
-        .file-icon {{
-            background-color: var(--md-sys-color-primary);
-            color: #381E72;
-            width: 40px; height: 40px; border-radius: 50%;
-            display: flex; justify-content: center; align-items: center;
-        }}
-        .file-info {{ flex-grow: 1; overflow: hidden; }}
-        .file-name {{ font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .file-size {{ font-size: 12px; color: var(--md-sys-color-on-surface-variant); mt-2 }}
-        .image-preview {{
-            margin-top: 16px; max-width: 100%; border-radius: 16px; display: block;
-        }}
-    </style>
-</head>
-<body>
-<div class="container">
-    <div class="header-card">
-        <div class="subject">{html.escape(subject)}</div>
-        <div class="meta-row">
-            <span class="material-symbols-outlined meta-icon">person</span>
-            <span class="meta-label">От:</span>
-            <span class="meta-value">{html.escape(sender)}</span>
-        </div>
-        <div class="meta-row">
-            <span class="material-symbols-outlined meta-icon">mail</span>
-            <span class="meta-label">Кому:</span>
-            <span class="meta-value">{html.escape(", ".join(rcpt_tos))}</span>
-        </div>
-    </div>
-
-    <div class="body-card">
-        {body_to_render}
-    </div>
-"""
-        # Блок с любыми вложениями
-        if attachments:
-            html_template += """
-    <div class="attachments-section">
-        <div class="attachments-title">
-            <span class="material-symbols-outlined">attachment</span>
-            Вложения
-        </div>
-        <div class="attachments-grid">"""
-
-            for att in attachments:
-                safe_name = html.escape(att["name"])
-                url_name = urllib.parse.quote(att["name"])
-                link = f"/download/{token}/{url_name}"
-                size_str = format_size(att["size"])
-                icon = "image" if att["is_image"] else "insert_drive_file"
-
-                html_template += f'''
-            <a href="{link}" class="file-card" target="_blank">
-                <div class="file-icon"><span class="material-symbols-outlined">{icon}</span></div>
-                <div class="file-info">
-                    <div class="file-name">{safe_name}</div>
-                    <div class="file-size">{size_str}</div>
-                </div>
-                <span class="material-symbols-outlined" style="color: var(--md-sys-color-on-surface-variant)">download</span>
-            </a>'''
-
-            html_template += "</div>"
-
-            # Если среди файлов были картинки, покажем их предпросмотр под списком файлов
-            for att in attachments:
-                if att["is_image"]:
-                    url_name = urllib.parse.quote(att["name"])
-                    html_template += f'<img src="/download/{token}/{url_name}" class="image-preview">'
-
-            html_template += "</div>"
-
-        html_template += "</div></body></html>"
-
-        # Сохраняем в базу данных
+        json_string = json.dumps(email_data, ensure_ascii=False)
         expires_at = time.time() + 3600
+
         conn = sqlite3.connect("mailbot.db")
         c = conn.cursor()
-        c.execute(
-            "INSERT INTO messages (token, html, expires_at) VALUES (?, ?, ?)",
-            (token, html_template, expires_at),
-        )
+        c.execute("INSERT INTO messages (token, html, expires_at) VALUES (?, ?, ?)", (token, json_string, expires_at))
         conn.commit()
 
-        email_link = f"{WEB_URL_BASE}/mail/{token}"
-        #zercalo = f"http://0.0.0.0/mail/{token}"
-        if not plain_text:
-            plain_text = "[HTML-письмо. Откройте по ссылке]"
+        email_link = f"{WEB_URL_BASE}/mail?token={token}"
+        if not plain_text: plain_text = "[HTML-письмо. Откройте по ссылке]"
 
-        # Отправка уведомлений
         for rcpt in rcpt_tos:
             c.execute("SELECT user_id FROM emails WHERE email = ?", (rcpt,))
             row = c.fetchone()
             if row:
                 user_id = row[0]
-
-                att_text = (
-                    f"\n📎 <b>Вложений:</b> {len(attachments)} шт."
-                    if attachments
-                    else ""
-                )
+                att_text = f"\n📎 <b>Вложений:</b> {len(attachments)} шт." if attachments else ""
                 text_for_tg = (
                     f"📧 <b>Новое письмо!</b>\n\n"
                     f"📥 <b>Кому:</b> <code>{html.escape(rcpt)}</code>\n"
                     f"📤 <b>От:</b> <code>{html.escape(sender)}</code>\n"
                     f"📝 <b>Тема:</b> {html.escape(subject)}{att_text}\n\n"
                     f"<b>Превью:</b>\n{html.escape(plain_text[:800])}...\n\n"
-                    f"Ссылка: {email_link}\n"
-                   # f"Зеркало: {zercalo}\n"
                     f"<i>⏳ Ссылка активна 1 час.</i>"
                 )
-
-                markup = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="📄 Открыть полное письмо", url=email_link
-                            )
-                        ]
-                    ]
-                )
-
-                try:
-                    await self.bot.send_message(
-                        user_id, text_for_tg, parse_mode="HTML", reply_markup=markup
-                    )
-                except Exception as e:
-                    print(f"❌ Ошибка отправки ТГ: {e}")
+                markup = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📄 Открыть письмо", url=email_link)]
+                ])
+                try: await self.bot.send_message(user_id, text_for_tg, parse_mode="HTML", reply_markup=markup)
+                except: pass
 
         conn.close()
+        print(f"[{time.strftime('%X')}] ✅ Успешно обработано: {subject}")
         return "250 Message accepted for delivery"
 
+# --- ВЕБ-СЕРВЕР И API ---
+async def handle_static_page(request):
+    if not os.path.exists("index.html"):
+        return web.Response(text="Файл index.html не найден на сервере!", status=404)
+    return web.FileResponse("index.html")
 
-# --- ОБРАБОТКА ЗАПРОСОВ ВЕБ-СЕРВЕРА ---
-async def handle_mail_view(request):
-    token = request.match_info.get("token")
+def fetch_mail_sync(token):
     conn = sqlite3.connect("mailbot.db")
     c = conn.cursor()
     c.execute("SELECT html, expires_at FROM messages WHERE token = ?", (token,))
     row = c.fetchone()
-
-    if not row:
-        conn.close()
-        return web.Response(
-            text="<h1>Ошибка 404</h1><p>Письмо не найдено.</p>",
-            content_type="text/html",
-            status=404,
-        )
-
-    html_content, expires_at = row
-    if time.time() > expires_at:
+    if row and time.time() > row[1]:
         c.execute("DELETE FROM messages WHERE token = ?", (token,))
         conn.commit()
-        conn.close()
-        shutil.rmtree(os.path.join(ATTACHMENTS_DIR, token), ignore_errors=True)
-        return web.Response(
-            text="<h1>Ссылка устарела</h1><p>Письмо удалено.</p>",
-            content_type="text/html",
-            status=404,
-        )
-
+        row = None
     conn.close()
-    return web.Response(text=html_content, content_type="text/html")
+    return row
 
+async def handle_api_mail(request):
+    token = request.match_info.get("token")
+    row = await asyncio.to_thread(fetch_mail_sync, token)
+
+    if not row:
+        shutil.rmtree(os.path.join(ATTACHMENTS_DIR, token), ignore_errors=True)
+        return web.json_response({"error": "Письмо не найдено или удалено"}, status=404)
+
+    json_data = row[0]
+    return web.Response(text=json_data, content_type="application/json")
 
 async def handle_download(request):
     token = request.match_info.get("token")
-    filename = request.match_info.get("filename")
-
-    # Защита от выхода из директории (Path Traversal)
-    filename = urllib.parse.unquote(filename).replace("/", "").replace("\\", "")
+    filename = os.path.basename(urllib.parse.unquote(request.match_info.get("filename")))
     filepath = os.path.join(ATTACHMENTS_DIR, token, filename)
-
     if os.path.exists(filepath):
         return web.FileResponse(filepath)
-    return web.Response(status=404, text="Файл не найден или срок действия истек.")
+    return web.Response(status=404, text="Файл не найден.")
 
-
-# --- ФОНОВАЯ ОЧИСТКА БАЗЫ И ФАЙЛОВ ---
 async def cleanup_storage():
-    """Раз в минуту проверяет БД и удаляет письма и файлы старше 1 часа"""
     while True:
         now = time.time()
         try:
             conn = sqlite3.connect("mailbot.db")
             c = conn.cursor()
             c.execute("SELECT token FROM messages WHERE expires_at < ?", (now,))
-            expired_tokens = c.fetchall()
-
-            for (token,) in expired_tokens:
-                # Удаляем файлы с диска
+            for (token,) in c.fetchall():
                 shutil.rmtree(os.path.join(ATTACHMENTS_DIR, token), ignore_errors=True)
-                # Удаляем из БД
                 c.execute("DELETE FROM messages WHERE token = ?", (token,))
-
             conn.commit()
             conn.close()
-        except Exception as e:
-            print(f"Ошибка очистки БД: {e}")
-
+        except: pass
         await asyncio.sleep(60)
 
-
-# --- ОСНОВНОЙ ЗАПУСК ---
 async def main():
     init_env()
-
     session = AiohttpSession(proxy=PROXY_URL, timeout=300.0)
     bot = Bot(token=BOT_TOKEN, session=session)
-
     asyncio.create_task(cleanup_storage())
 
     app = web.Application()
-    app.add_routes(
-        [
-            web.get("/mail/{token}", handle_mail_view),
-            web.get(
-                "/download/{token}/{filename}", handle_download
-            ),  # Маршрут для файлов
-        ]
-    )
+    app.add_routes([
+        web.get("/mail", handle_static_page),                # Отдача HTML-интерфейса
+        web.get("/api/mail/{token}", handle_api_mail),       # API (Выдает JSON)
+        web.get("/download/{token}/{filename}", handle_download), # Скачивание файлов
+    ])
     runner = web.AppRunner(app)
     await runner.setup()
 
@@ -533,7 +367,7 @@ async def main():
         site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
         await site.start()
         print(f"🌐 Веб-сервер запущен на порту {WEB_PORT}")
-    except OSError as e:
+    except OSError:
         print(f"❌ ОШИБКА: Порт {WEB_PORT} занят.")
         return
 
@@ -544,13 +378,6 @@ async def main():
 
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-
-    async def run():
-        try:
-            await main()
-        except KeyboardInterrupt:
-            print("\nОстановка...")
-
-    asyncio.run(run())
+    asyncio.run(main())
+(venv) root@dont65:~/mail-panel# 
