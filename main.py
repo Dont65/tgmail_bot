@@ -380,4 +380,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-(venv) root@dont65:~/mail-panel# 
