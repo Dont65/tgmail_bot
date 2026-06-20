@@ -390,7 +390,7 @@ class MailHandler:
         conn.commit()
 
         email_link = f"{WEB_URL_BASE}/mail/{token}"
-        zercalo = f"http://195.93.252.54/mail/{token}"
+        #zercalo = f"http://0.0.0.0/mail/{token}"
         if not plain_text:
             plain_text = "[HTML-письмо. Откройте по ссылке]"
 
@@ -413,7 +413,7 @@ class MailHandler:
                     f"📝 <b>Тема:</b> {html.escape(subject)}{att_text}\n\n"
                     f"<b>Превью:</b>\n{html.escape(plain_text[:800])}...\n\n"
                     f"Ссылка: {email_link}\n"
-                    f"Зеркало: {zercalo}\n"
+                   # f"Зеркало: {zercalo}\n"
                     f"<i>⏳ Ссылка активна 1 час.</i>"
                 )
 
